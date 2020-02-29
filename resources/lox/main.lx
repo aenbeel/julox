@@ -1,1 +1,5 @@
-// Primo lox file
+if (length >= min) {
+    found = true;
+} else {
+    found = false;
+}
