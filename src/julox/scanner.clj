@@ -2,9 +2,13 @@
     (:require [clojure.set :refer [union]])
     (:require [clojure.java.io :as io]))
 
-(def special-words #{:if :else :return})
 
-(def special-sequences
+
+(def reserved #{:function :if :else :return})
+
+
+
+(def specials
   {\( {:type "left-paren"
        :next {}}
 
@@ -47,56 +51,155 @@
    \< {:type "less" 
        :next  {\= {:type "-equal"}}}})
 
-(defn init-lex [source]
-  {:line 1
-   :source source
-   :tokens []})
 
-(defn token [typ value]
-  {:type typ
-   :value value})
+
+(def number-set (char-set \0 \9))
+
+
+
+(def word-start-set
+  (union (char-set \A \Z)
+         (char-set \a \z)
+         #{\_}))
+
+
+
+(defrecord Lex [source line tokens])
+
+
+
+(defn init-lex [source]
+  (Lex. source 1 []))
+
+
+
+(defrecord Token [type value line])
+
+
+
+(defn make-token
+  ([type value]
+   (Token. type value 0))
+  ([type value line]
+   (Token. type value line)))
+
+
 
 (defn error-msg [line message]
   (str "[line:" line "] LexerError: " message))
+
+
 
 (defn char-set
   "Generate set containing all characters in the range [from; to]"
   [from to]
   (set (map char (range (int from) (inc (int to))))))
 
-(def identifier-start (union (char-set \A \Z)
-                             (char-set \a \z)
-                             #{\_}))
-(def identifier-rest (union identifier-start
-                            (char-set \0 \9)))
-
-(defn find-identifier [source sets]
-  (let [initial (:first sets)
-        subsequent (:rest sets)]
-  ;; (assert (initial (first source))
-  ;;         (error-msg "Identifier cannot start with a number"))
-  (loop [src source
-         value ""]
-    (if (subsequent (first src))
-      (recur (rest src) (str value (first src)))
-      (let [normal? (not (special-words (keyword value)))]
-        {:token  (token (if normal? :identifier :keyword) value)
-         :count (count value)})))))
 
 
-(defn find-specials [source ch info]
-  (loop [src source
-         segment (array-map ch info)
-         typ ""
-         value ""]
-    (let [entry (first segment)]
-      (if (and entry (= (first src) (key entry)))
-        (recur (rest src)
-               (:next (val entry))
-               (str typ (:type (val entry)))
-               (str value (key entry)))
-        {:token (token (keyword typ) value)
-         :count (count value)}))))
+(defn literal-num?
+  "Test whether 'ch' represents a number."
+  [ch]
+  (number-set ch))
+
+
+
+(defn literal-str? 
+  "Test whether 'ch' is a double quote character."
+  [ch]
+  (= ch \"))
+
+
+
+(defn special?
+  "Test whether char is one of the special character."
+  [ch]
+  (specials ch))
+
+
+
+(defn word?
+  "Test whether 'ch' is one of the admissible initial characters for a word."
+  [ch]
+  (word-start-set ch))
+
+
+
+(defn make-tokenizer [start continue check assemble finalize]
+  (fn [source]
+    (loop [src source
+           condition (start (first source))
+           result (map->Token {:value ""})]
+      (let [ch (first src)]
+        (if (check ch condition)
+          (recur (rest src)
+                 (continue condition)
+                 (assemble ch condition result))
+          (finalize result))))))
+
+
+
+(defn tokenize-num [source]
+  (let [tokenizer
+        (make-tokenizer
+          (constantly number-set)
+          (constantly number-set)
+          (fn [ch condition] (condition ch))
+          (fn [ch _ result]
+            (update result :value str ch))
+          (fn [result]
+            (assoc result :type :number)))]
+   (tokenizer source)))
+
+
+
+(defn tokenize-str [source]
+  (let [tokenizer
+        (make-tokenizer
+          (constantly #"[\"]")
+          (constantly #"[^\"]")
+          (fn [ch condition] (re-matches condition (str ch)))
+          (fn [ch _ result]
+            (update result :value str ch))
+          (fn [result]
+            (-> result
+                (update :value str \")
+                (assoc :type :string))))]
+    (tokenizer source)))
+
+
+
+(defn tokenize-special [source]
+  (let [tokenizer
+        (make-tokenizer
+          (fn [ch] (first (array-map ch (specials ch))))
+          (fn [condition] (first (:next (val condition))))
+          (fn [ch condition] (and condition (= ch (key condition)) ))
+          (fn [_ condition result]
+            (-> result
+                (update :type
+                        (fnil str "")
+                        (:type (val condition)))
+                (update :value str (key condition))))
+          #(update % :type keyword))]
+    (tokenizer source)))
+
+
+
+(defn tokenize-word [source]
+  (let [tokenizer
+        (make-tokenizer
+          (constantly word-start-set)
+          (constantly (union word-start-set number-set))
+          (fn [ch condition] (condition ch))
+          (fn [ch _ result]
+            (update result :value str ch))
+          (fn [result]
+            (let [reserved? (reserved (keyword (:value result)))]
+              (assoc result :type (if reserved? :keyword :identifier)))))]
+    (tokenizer source)))
+
+
 
 (defn add-token [lex token]
   (let [line (:line lex)]
@@ -106,15 +209,18 @@
             (assoc token :line line))))
 
 
-(defn advance
+
+(defn consume
   ([lex]
    (assoc lex :source (rest (:source lex))))
   ([lex n]
-   (nth (iterate advance lex) n)))
+   (nth (iterate consume lex) n)))
+
 
 
 (defn inc-line [lex]
   (update lex :line inc))
+
 
 
 (defn next-token [lex]
@@ -122,28 +228,21 @@
         ch (first src)]
     (cond
       (or (= \space ch) 
-          (= \tab ch)) (advance lex)
+          (= \tab ch)) (consume lex)
 
-      (= \newline ch) (inc-line (advance lex))
+      (= \newline ch) (inc-line (consume lex))
 
-      (multi-char-token? ch)
-      (let [finder (if (special-sequences ch)
-                     (fn [source]
-                       (find-specials source ch (special-sequences ch)))
-                     (fn [source]
-                       (find-identifier source {:first identifier-start
-                                                :rest identifier-rest})))
-            result (finder src)]
+      :else 
+      (let [token (cond
+                     (literal-num? ch) (tokenize-num src)
+                     (literal-str? ch) (tokenize-str src)
+                     (special? ch) (tokenize-special src)
+                     (word? ch) (tokenize-word src)
+                     :else (make-token "fake" "a"))]
         (-> lex
-            (add-token (:token result))
-            (advance (:count result))))
+            (add-token token)
+            (consume (count (:value token))))))))
 
-      :else (do (println "Unexpected character.")
-                lex))))
-
-(defn multi-char-token? [ch]
-  (or (special-sequences ch)
-      (identifier-start ch)))
 
 
 (defn tokenize [source]
@@ -153,5 +252,5 @@
       (recur (next-token lex)))))
 
 
-
+;; (clojure.pprint/pprint (tokenize (slurp (io/resource "lox/nums.lx"))))
 (clojure.pprint/pprint (tokenize (slurp (io/resource "lox/main.lx"))))
