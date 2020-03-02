@@ -85,6 +85,29 @@
 
 
 
+(defn add-token [lex token]
+  (let [line (:line lex)]
+    (update lex
+            :tokens
+            conj
+            (assoc token :line line))))
+
+
+
+(defn consume
+  ([lex]
+   (assoc lex :source (rest (:source lex))))
+  ([lex n]
+   (nth (iterate consume lex) n)))
+
+
+
+(defn inc-line [lex]
+  (update lex :line inc))
+
+
+
+
 (defn error-msg [line message]
   (str "[line:" line "] LexerError: " message))
 
@@ -198,28 +221,6 @@
             (let [reserved? (reserved (keyword (:value result)))]
               (assoc result :type (if reserved? :keyword :identifier)))))]
     (tokenizer source)))
-
-
-
-(defn add-token [lex token]
-  (let [line (:line lex)]
-    (update lex
-            :tokens
-            conj
-            (assoc token :line line))))
-
-
-
-(defn consume
-  ([lex]
-   (assoc lex :source (rest (:source lex))))
-  ([lex n]
-   (nth (iterate consume lex) n)))
-
-
-
-(defn inc-line [lex]
-  (update lex :line inc))
 
 
 
