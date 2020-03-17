@@ -1,257 +1,168 @@
 (ns julox.scanner
-    (:require [clojure.set :refer [union]])
-    (:require [clojure.java.io :as io]))
-
-
-
-(def reserved #{:function :if :else :return})
-
-
-
-(def specials
-  {\( {:type "left-paren"
-       :next {}}
-
-   \) {:type "right-paren"
-       :next  {}}
-
-   \{ {:type "left-brace"
-       :next  {}}
-
-   \} {:type "right-brace"
-       :next  {}}
-
-   \, {:type "comma"
-       :next  {}}
-
-   \. {:type "dot"
-       :next  {}}
-
-   \- {:type "minus"
-       :next  {}}
-
-   \+ {:type "plus"
-       :next  {}}
-
-   \; {:type "semicolon"
-       :next  {}}
-
-   \* {:type "star"
-       :next  {}}
-
-   \! {:type "bang" 
-       :next  {\= {:type "-equal"}}}
-
-   \= {:type "equal" 
-       :next  {\= {:type "-equal"}}}
-
-   \> {:type "greater" 
-       :next  {\= {:type "-equal"}}}
-
-   \< {:type "less" 
-       :next  {\= {:type "-equal"}}}})
-
-
-
-(def number-set (char-set \0 \9))
-
-
-
-(def word-start-set
-  (union (char-set \A \Z)
-         (char-set \a \z)
-         #{\_}))
-
-
+  (:require [clojure.set :refer [union]]
+            [clojure.string :as s]
+            [clojure.java.io :as io]))
 
 (defrecord Lex [source line tokens])
-
-
-
-(defn init-lex [source]
-  (Lex. source 1 []))
-
-
-
 (defrecord Token [type value line])
-
-
-
-(defn make-token
-  ([type value]
-   (Token. type value 0))
-  ([type value line]
-   (Token. type value line)))
-
-
-
-(defn add-token [lex token]
-  (let [line (:line lex)]
-    (update lex
-            :tokens
-            conj
-            (assoc token :line line))))
-
-
-
-(defn consume
-  ([lex]
-   (assoc lex :source (rest (:source lex))))
-  ([lex n]
-   (nth (iterate consume lex) n)))
-
-
-
-(defn inc-line [lex]
-  (update lex :line inc))
-
-
-
-
-(defn error-msg [line message]
-  (str "[line:" line "] LexerError: " message))
-
-
 
 (defn char-set
   "Generate set containing all characters in the range [from; to]"
   [from to]
   (set (map char (range (int from) (inc (int to))))))
 
+(def reserved-set #{:function :if :else :return})
+(def number-set (char-set \0 \9))
+(def word-start-set
+  (union (char-set \A \Z)
+         (char-set \a \z)
+         #{\_}))
+
+(defn add-token [lex token]
+  (let [line (:line lex)]
+    (if (= (:type token) :ignore)
+      lex
+      (update lex :tokens conj (assoc token :line line)))))
+
+(defn consume
+  ([lex]
+   (assoc lex :source (rest (:source lex))))
+  ([lex n]
+   (first (drop n (iterate consume lex)))))
+
+(defn inc-line
+  ([lex]
+   (update lex :line inc))
+  ([lex n]
+   (first (drop n (iterate inc-line lex)))))
+
+(defn error-msg [line message]
+  (str "[line:" line "] LexerError: " message))
+
+(def specials-fsm {:ok {:l-paren  :left-paren
+                        :r-paren  :right-paren
+                        :l-brace  :left-brace
+                        :r-brace  :right-brace
+                        :comma    :comma
+                        :dot      :dot
+                        :minus    :minus
+                        :plus     :plus
+                        :semic    :semicolon
+                        :star     :star
+                        :bang     :bang 
+                        :bang-eq  :bang-equal
+                        :eq       :equal
+                        :eq-eq    :equal-equal
+                        :gt       :greater
+                        :gt-eq    :greater-equal
+                        :less     :less 
+                        :less-eq  :less-equal}
+                   :tx {:init [{:via #{\(} :to :l-paren}
+                               {:via #{\)} :to :r-paren}
+                               {:via #{\{} :to :l-brace}
+                               {:via #{\}} :to :r-brace}
+                               {:via #{\,} :to :comma}
+                               {:via #{\.} :to :dot}
+                               {:via #{\-} :to :minus}
+                               {:via #{\+} :to :plus}
+                               {:via #{\;} :to :semic}
+                               {:via #{\*} :to :star}
+                               {:via #{\!} :to :bang}
+                               {:via #{\=} :to :eq}
+                               {:via #{\>} :to :gt}
+                               {:via #{\<} :to :less}]
+                        :bang [{:via #{\=} :to :bang-eq}]
+                        :eq [{:via #{\=} :to :eq-eq}]
+                        :gt [{:via #{\=} :to :gt-eq}]
+                        :less [{:via #{\=} :to :less-eq}]}})
+
+(def comment-fsm
+  {:ok {:lineend :comment}
+   :tx {:init [{:via #{\/} :to :slash1}]
+        :slash1 [{:via #{\/} :to :text}]
+        :text [{:via #(not= % \newline) :to :text}
+               {:via #{\newline} :to :lineend}]}})
+
+(def number-fsm
+  {:ok {:integer :number
+        :float :number}
+   :tx {:init [{:via number-set :to :integer}]
+        :integer [{:via number-set :to :integer}
+                  {:via #{\.} :to :dot}]
+        :dot [{:via number-set :to :float}]
+        :float [{:via number-set :to :float}]}})
 
 
-(defn literal-num?
-  "Test whether 'ch' represents a number."
-  [ch]
-  (number-set ch))
+(def string-fsm
+  {:ok {:closed :string}
+   :tx {:init [{:via #{\"} :to :open}]
+        :open [{:via #(not (#{\newline \\ \"} %)) :to :open}
+               {:via #{\\} :to :esc}
+               {:via #{\"} :to :closed}]
+        :esc [{:via #{\\ \"} :to :open}]}})
 
+(def word-fsm
+  {:ok {:word :identifier}
+   :tx {:init [{:via word-start-set :to :word}]
+        :word [{:via (union word-start-set
+                            number-set) :to :word}]}
+   :update! #(if (reserved-set (keyword (:value %)))
+               (assoc % :type :reserved)
+               (identity %))})
 
+(def blanks-fsm
+  {:ok {:blank :ignore}
+   :tx {:init [{:via #{\space \tab \newline} :to :blank}]}})
 
-(defn literal-str? 
-  "Test whether 'ch' is a double quote character."
-  [ch]
-  (= ch \"))
+(defn update-if [update! token]
+  (if (fn? update!)
+    (update! token)
+    token))
 
+(defn parse-with-fsm [source fsm]
+  (loop [src source
+         state :init
+         value ""
+         line-inc 0]
+    (let [ch (first src)
+          newline? (= ch \newline)
+          transition (first (filter #((:via %)  ch)
+                                    (get-in fsm [:tx state])))]
+      (if transition
+        (recur (rest src)
+               (:to transition)
+               (str value ch)
+               (if newline? (inc line-inc) line-inc))
+        (when-let [token-type (get-in fsm [:ok state])]
+          {:line-inc line-inc
+           :token (update-if (:update! fsm) {:type token-type
+                                             :value value})})))))
 
+(defn parse-next-token [source]
+  (let [fsms [blanks-fsm
+              number-fsm
+              specials-fsm
+              string-fsm
+              word-fsm]]
+    (->> fsms
+         (map #(parse-with-fsm source %))
+         (filter identity)
+         (first))))
 
-(defn special?
-  "Test whether char is one of the special character."
-  [ch]
-  (specials ch))
-
-
-
-(defn word?
-  "Test whether 'ch' is one of the admissible initial characters for a word."
-  [ch]
-  (word-start-set ch))
-
-
-
-(defn make-tokenizer [start continue check assemble finalize]
-  (fn [source]
-    (loop [src source
-           condition (start (first source))
-           result (map->Token {:value ""})]
-      (let [ch (first src)]
-        (if (check ch condition)
-          (recur (rest src)
-                 (continue condition)
-                 (assemble ch condition result))
-          (finalize result))))))
-
-
-
-(defn tokenize-num [source]
-  (let [tokenizer
-        (make-tokenizer
-          (constantly number-set)
-          (constantly number-set)
-          (fn [ch condition] (condition ch))
-          (fn [ch _ result]
-            (update result :value str ch))
-          (fn [result]
-            (assoc result :type :number)))]
-   (tokenizer source)))
-
-
-
-(defn tokenize-str [source]
-  (let [tokenizer
-        (make-tokenizer
-          (constantly #"[\"]")
-          (constantly #"[^\"]")
-          (fn [ch condition] (re-matches condition (str ch)))
-          (fn [ch _ result]
-            (update result :value str ch))
-          (fn [result]
-            (-> result
-                (update :value str \")
-                (assoc :type :string))))]
-    (tokenizer source)))
-
-
-
-(defn tokenize-special [source]
-  (let [tokenizer
-        (make-tokenizer
-          (fn [ch] (first (array-map ch (specials ch))))
-          (fn [condition] (first (:next (val condition))))
-          (fn [ch condition] (and condition (= ch (key condition)) ))
-          (fn [_ condition result]
-            (-> result
-                (update :type
-                        (fnil str "")
-                        (:type (val condition)))
-                (update :value str (key condition))))
-          #(update % :type keyword))]
-    (tokenizer source)))
-
-
-
-(defn tokenize-word [source]
-  (let [tokenizer
-        (make-tokenizer
-          (constantly word-start-set)
-          (constantly (union word-start-set number-set))
-          (fn [ch condition] (condition ch))
-          (fn [ch _ result]
-            (update result :value str ch))
-          (fn [result]
-            (let [reserved? (reserved (keyword (:value result)))]
-              (assoc result :type (if reserved? :keyword :identifier)))))]
-    (tokenizer source)))
-
-
-
-(defn next-token [lex]
-  (let [src (:source lex)
-        ch (first src)]
-    (cond
-      (or (= \space ch) 
-          (= \tab ch)) (consume lex)
-
-      (= \newline ch) (inc-line (consume lex))
-
-      :else 
-      (let [token (cond
-                     (literal-num? ch) (tokenize-num src)
-                     (literal-str? ch) (tokenize-str src)
-                     (special? ch) (tokenize-special src)
-                     (word? ch) (tokenize-word src)
-                     :else (make-token "fake" "a"))]
-        (-> lex
-            (add-token token)
-            (consume (count (:value token))))))))
-
-
+(defn update-lex [lex result]
+  (let [{:keys [line-inc token]} result]
+    (-> lex
+        (add-token token)
+        (inc-line line-inc)
+        (consume (count (:value token))))))
 
 (defn tokenize [source]
-  (loop [lex (init-lex source)]
-    (if (empty? (:source lex))
-      (:tokens lex)
-      (recur (next-token lex)))))
+  (loop [lex (Lex. source 1 [])]
+    (let [result (parse-next-token (:source lex))]
+      (recur (update-lex lex result))
+      (if (or (nil? source) (empty? source))
+        lex
+        (do (error-msg (:line lex) "An error occurred")
+            lex)))))
 
-
-;; (clojure.pprint/pprint (tokenize (slurp (io/resource "lox/nums.lx"))))
 (clojure.pprint/pprint (tokenize (slurp (io/resource "lox/main.lx"))))
