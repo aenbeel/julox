@@ -158,11 +158,13 @@
 
 (defn tokenize [source]
   (loop [lex (Lex. source 1 [])]
-    (let [result (parse-next-token (:source lex))]
-      (recur (update-lex lex result))
-      (if (or (nil? source) (empty? source))
-        lex
-        (do (error-msg (:line lex) "An error occurred")
-            lex)))))
+    (let [src (:source lex)]
+      (if-let [result (parse-next-token src)]
+        (recur (update-lex lex result))
+        (if (or (nil? src) (empty? src))
+          lex
+          (do (error-msg (:line lex)
+                         (str "Trying to parse: " (first (s/split (str src) #"\n"))))
+              lex))))))
 
 (clojure.pprint/pprint (tokenize (slurp (io/resource "lox/main.lx"))))
