@@ -1,5 +1,9 @@
-if (length >= min) {
-    found = true;
-} else {
-    found = false;
+function trovato (length) {
+    if (length >= 1) {
+        found = "yes";
+    } else {
+        found = "nope";
+    }
+
+    return found;
 }
