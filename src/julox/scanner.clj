@@ -80,13 +80,6 @@
   {:ok {:blank :ignore}
    :tx {:init [{:via #{\space \tab \newline} :to :blank}]}})
 
-(def comment-fsm
-  {:ok {:lineend :comment}
-   :tx {:init [{:via #{\/} :to :slash}]
-        :slash [{:via #{\/} :to :text}]
-        :text [{:via #(not= % \newline) :to :text}
-               {:via #{\newline} :to :lineend}]}})
-
 (def number-fsm
   {:ok {:integer :number
         :float :number}
