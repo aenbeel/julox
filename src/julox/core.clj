@@ -4,14 +4,13 @@
 
 (def loxsrc "lox/main.lx")
 
-(def evaluate evaluate1)
+(defn evaluate1 [source] source)
 
-(defn start [& args]
-  (let [argv (vec args)
-        argc (count argv)]
-    (cond (> argc 1) (throw-usage-message)
-          (= argc 1) (run-file (argv 0))
-          (= argc 0) (run-repl))))
+(defn evaluate2 [source]
+  (doseq [token (scanner/tokenize source)]
+    (println token)))
+
+(def evaluate evaluate1)
 
 (defn throw-usage-message []
   (println "Usage: julox [source-file]"))
@@ -24,11 +23,12 @@
                      (evaluate)
                      (println))))
 
-(defn evaluate1 [source] source)
-
-(defn evaluate2 [source]
-  (doseq [token (scanner/scan source)]
-    (println token)))
+(defn start [& args]
+  (let [argv (vec args)
+        argc (count argv)]
+    (cond (> argc 1) (throw-usage-message)
+          (= argc 1) (run-file (argv 0))
+          (= argc 0) (run-repl))))
 
 (defn error [line message]
   (println (str "[line" line "] Error: " message)))
