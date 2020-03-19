@@ -76,10 +76,14 @@
                         :gt [{:via #{\=} :to :gt-eq}]
                         :less [{:via #{\=} :to :less-eq}]}})
 
+(def blanks-fsm
+  {:ok {:blank :ignore}
+   :tx {:init [{:via #{\space \tab \newline} :to :blank}]}})
+
 (def comment-fsm
   {:ok {:lineend :comment}
-   :tx {:init [{:via #{\/} :to :slash1}]
-        :slash1 [{:via #{\/} :to :text}]
+   :tx {:init [{:via #{\/} :to :slash}]
+        :slash [{:via #{\/} :to :text}]
         :text [{:via #(not= % \newline) :to :text}
                {:via #{\newline} :to :lineend}]}})
 
@@ -110,14 +114,17 @@
                (assoc % :type :reserved)
                (identity %))})
 
-(def blanks-fsm
-  {:ok {:blank :ignore}
-   :tx {:init [{:via #{\space \tab \newline} :to :blank}]}})
-
 (defn update-if [update! token]
   (if (fn? update!)
     (update! token)
     token))
+
+(def comment-fsm
+  {:ok {:lineend :comment}
+   :tx {:init [{:via #{\/} :to :slash}]
+        :slash [{:via #{\/} :to :text}]
+        :text [{:via #(not= % \newline) :to :text}
+               {:via #{\newline} :to :lineend}]}})
 
 (defn parse-with-fsm [source fsm]
   (loop [src source
@@ -129,17 +136,23 @@
           transition (first (filter #((:via %)  ch)
                                     (get-in fsm [:tx state])))]
       (if transition
-        (recur (rest src)
-               (:to transition)
-               (str value ch)
-               (if newline? (inc line-inc) line-inc))
+        (do
+          (println (str ch " to " (:to transition)))
+          (recur (rest src)
+                 (:to transition)
+                 (str value ch)
+                 (if newline? (inc line-inc) line-inc)))
+        
         (when-let [token-type (get-in fsm [:ok state])]
+          (do
+            (println (str ch " to " state))
           {:line-inc line-inc
            :token (update-if (:update! fsm) {:type token-type
-                                             :value value})})))))
+                                             :value value})}))))))
 
 (defn parse-next-token [source]
   (let [fsms [blanks-fsm
+              comment-fsm
               number-fsm
               specials-fsm
               string-fsm
@@ -167,4 +180,8 @@
                          (str "Trying to parse: " (first (s/split (str src) #"\n"))))
               lex))))))
 
-(clojure.pprint/pprint (tokenize (slurp (io/resource "lox/main.lx"))))
+(comment (tokenize (str "// ciao\n"))
+(clojure.pprint/pprint (tokenize (str "// this is a comment"
+                                      "(( )){} // grouping stuff"
+                                      "!*+-/=<> <= == // operators")))
+(clojure.pprint/pprint (tokenize (slurp (io/resource "lox/main.lx")))))
