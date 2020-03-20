@@ -181,13 +181,5 @@
          (tokenize (str "123..4"))
          (pp/pprint (tokenize (str "(( )){} // grouping stuff"
                                    "!*+-/=<> <= == // operators")))
-         (pp/pprint (tokenize (slurp (io/resource "lox/main.lx"))))
-
-         (def exclude (union (set (map char (range 91 97)))
-                             (set (map char (range 58 64)))))
-
-         (defn rand-str [n]
-           (->> (repeatedly n #(char (+ (* (rand) (- 122 48))
-                                        48)))
-                (filter #(not (exclude %))))))
+         (pp/pprint (tokenize (slurp (io/resource "lox/main.lx")))))
 
