@@ -1,5 +1,6 @@
 (ns julox.scanner
   (:require [clojure.set :refer [union]]
+            [clojure.pprint :as pp]
             [clojure.string :as s]
             [clojure.java.io :as io]))
 
@@ -80,6 +81,23 @@
   {:ok {:blank :ignore}
    :tx {:init [{:via #{\space \tab \newline} :to :blank}]}})
 
+(def comment-fsm
+  {:ok {:text :comment
+        :lineend :comment}
+   :tx {:init [{:via #{\/} :to :slash}]
+        :slash [{:via #{\/} :to :text}]
+        :text [{:via #{\newline} :to :lineend}
+               {:via #(not (#{\newline} %)) :to :text}]}})
+
+(def multi-comment-fsm
+  {:ok {:slash-end :multi-comment}
+   :tx {:init [{:via #{\/} :to :slash-start}]
+        :slash-start [{:via #{\*} :to :text}]
+        :text [{:via #(not (#{\*} %)) :to :text}
+               {:via #{\*} :to :star-end}]
+        :star-end [{:via #{\/} :to :slash-end}
+                   {:via #(not (#{\/} %)) :to :text}]}})
+
 (def number-fsm
   {:ok {:integer :number
         :float :number}
@@ -112,40 +130,25 @@
     (update! token)
     token))
 
-(def comment-fsm
-  {:ok {:lineend :comment}
-   :tx {:init [{:via #{\/} :to :slash}]
-        :slash [{:via #{\/} :to :text}]
-        :text [{:via #(not= % \newline) :to :text}
-               {:via #{\newline} :to :lineend}]}})
-
 (defn parse-with-fsm [source fsm]
   (loop [src source
          state :init
-         value ""
-         line-inc 0]
+         value ""]
     (let [ch (first src)
-          newline? (= ch \newline)
-          transition (first (filter #((:via %)  ch)
+          transition (first (filter #((:via %) ch)
                                     (get-in fsm [:tx state])))]
-      (if transition
-        (do
-          (println (str ch " to " (:to transition)))
-          (recur (rest src)
-                 (:to transition)
-                 (str value ch)
-                 (if newline? (inc line-inc) line-inc)))
-        
+      (if (and (char? ch) transition)
+        (recur (rest src)
+               (:to transition)
+               (str value ch))
         (when-let [token-type (get-in fsm [:ok state])]
-          (do
-            (println (str ch " to " state))
-          {:line-inc line-inc
-           :token (update-if (:update! fsm) {:type token-type
-                                             :value value})}))))))
+          (update-if (:update! fsm) {:type token-type
+                                     :value value}))))))
 
 (defn parse-next-token [source]
   (let [fsms [blanks-fsm
               comment-fsm
+              multi-comment-fsm
               number-fsm
               specials-fsm
               string-fsm
@@ -155,26 +158,36 @@
          (filter identity)
          (first))))
 
-(defn update-lex [lex result]
-  (let [{:keys [line-inc token]} result]
+(defn update-lex [lex token]
+  (let [value (:value token)]
     (-> lex
         (add-token token)
-        (inc-line line-inc)
-        (consume (count (:value token))))))
+        (inc-line ((frequencies value) \newline 0))
+        (consume (count value)))))
 
 (defn tokenize [source]
   (loop [lex (Lex. source 1 [])]
     (let [src (:source lex)]
       (if-let [result (parse-next-token src)]
         (recur (update-lex lex result))
-        (if (or (nil? src) (empty? src))
+        (if (empty? src)
           lex
-          (do (error-msg (:line lex)
-                         (str "Trying to parse: " (first (s/split (str src) #"\n"))))
-              lex))))))
+          (do
+            (pp/pprint (error-msg (:line lex)
+                       (str "Trying to parse: " (first (s/split (str src) #"\n")))))
+            lex))))))
 
-(comment (tokenize (str "// ciao\n"))
-(clojure.pprint/pprint (tokenize (str "// this is a comment"
-                                      "(( )){} // grouping stuff"
-                                      "!*+-/=<> <= == // operators")))
-(clojure.pprint/pprint (tokenize (slurp (io/resource "lox/main.lx")))))
+(comment (pp/pprint (tokenize (str "123")))
+         (tokenize (str "123..4"))
+         (pp/pprint (tokenize (str "(( )){} // grouping stuff"
+                                   "!*+-/=<> <= == // operators")))
+         (pp/pprint (tokenize (slurp (io/resource "lox/main.lx"))))
+
+         (def exclude (union (set (map char (range 91 97)))
+                             (set (map char (range 58 64)))))
+
+         (defn rand-str [n]
+           (->> (repeatedly n #(char (+ (* (rand) (- 122 48))
+                                        48)))
+                (filter #(not (exclude %))))))
+
