@@ -27,12 +27,25 @@
 
 (let [token (first tokens)
       rule (grammar rule-name)]
-  (if (or typ value)))
+  (cond (vec? rule) ()))
 
+{:expr (constantly :equality)
+ :equality ()}
+
+(defmulti match (fn [grammar] (type msg)))
+(defmethod hello clojure.lang.PersistentVector
+  [msg]
+  (print (apply str msg)))
+
+(defmethod hello clojure.lang.PersistentHashSet
+  [msg]
+  (hello (vec msg)))
 (defn check-type [token typ]
   ())
 (defn check-value [token value])
 
+(hello ["ciao" "fulippo"])
+(hello #{"ciao" "fulippo"})
 (defn match [ast token])
 (def s #{:a :b :c})
 (* (rand) (count s)) (vec #{:a :b})
